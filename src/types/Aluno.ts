@@ -7,5 +7,7 @@ export interface Aluno {
   cep: string;          // CEP consultado na API ViaCEP
   endereco: string;     // Endereço retornado pela API ViaCEP
   plano: string;        // Plano da academia (Ex: Mensal, Anual)
+  professorNome?: string;  // Nome do professor vinculado
+  professorEmail?: string; // E-mail do professor que vinculou este aluno
   sincronizado?: number; // 1 = Sincronizado com Firestore | 0 = Salvo apenas no SQLite (Offline)
 }

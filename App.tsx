@@ -10,20 +10,29 @@ import {
   Platform,
 } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
+import { Ionicons } from '@expo/vector-icons';
 import LoginScreen from './src/screens/LoginScreen';
 import AlunosScreen from './src/screens/AlunosScreen';
 import ExerciciosScreen from './src/screens/ExerciciosScreen';
 import TreinosScreen from './src/screens/TreinosScreen';
+import AreaAlunoScreen from './src/screens/AreaAlunoScreen';
+import PerfilScreen from './src/screens/PerfilScreen';
+import { PerfilUsuario } from './src/services/firebase';
 import { sincronizarAlunos } from './src/services/alunoService';
 import { sincronizarExercicios } from './src/services/exercicioService';
 import { sincronizarTreinos } from './src/services/treinoService';
 
+type AbaAtiva = 'alunos' | 'exercicios' | 'treinos' | 'meu_treino' | 'perfil';
+
 export default function App() {
-  const [usuarioLogado, setUsuarioLogado] = useState<string | null>(null);
-  const [telaAtiva, setTelaAtiva] = useState<'alunos' | 'exercicios' | 'treinos'>('alunos');
+  const [usuarioLogado, setUsuarioLogado] = useState<PerfilUsuario | null>(null);
+  const [telaAtiva, setTelaAtiva] = useState<AbaAtiva>('alunos');
+  const [alunoSelecionadoTreino, setAlunoSelecionadoTreino] = useState<string>('Todos');
 
   const [redeFisicaOnline, setRedeFisicaOnline] = useState(true);
   const [simularOffline, setSimularOffline] = useState(false);
+  const [syncKey, setSyncKey] = useState(0);
+  const [avisoSync, setAvisoSync] = useState('');
 
   const online = redeFisicaOnline && !simularOffline;
   const onlineAnteriorRef = useRef(online);
@@ -53,218 +62,375 @@ export default function App() {
     const qtdTreinos = await sincronizarTreinos();
     const total = qtdAlunos + qtdExercicios + qtdTreinos;
 
+    setSyncKey((prev) => prev + 1);
+
     if (total > 0) {
-      Alert.alert(
-        'Sincronização',
-        `${total} registro(s) salvos offline foram sincronizados com o Firestore.`
-      );
+      const msg = `${total} registro(s) salvo(s) offline foram sincronizados com a nuvem.`;
+      setAvisoSync(msg);
+      setTimeout(() => setAvisoSync(''), 5000);
+      if (Platform.OS !== 'web') {
+        Alert.alert('Sincronização Concluída', msg);
+      }
     }
   }
 
-  if (!usuarioLogado) {
-    return (
-      <SafeAreaView style={styles.container}>
-        <StatusBar barStyle="dark-content" />
-        <LoginScreen onLoginSucesso={(email) => setUsuarioLogado(email)} />
-      </SafeAreaView>
-    );
-  }
+  const ehAluno = usuarioLogado?.tipo === 'aluno';
+
+  const tituloTela =
+    telaAtiva === 'perfil'
+      ? 'Perfil'
+      : ehAluno
+      ? 'Minha Ficha'
+      : telaAtiva === 'alunos'
+      ? 'Alunos'
+      : telaAtiva === 'exercicios'
+      ? 'Catálogo'
+      : 'Fichas';
 
   return (
-    <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="dark-content" />
+    <View style={styles.outerBackground}>
+      <SafeAreaView style={styles.mobileFrame}>
+        <StatusBar barStyle="dark-content" />
 
-      {/* Cabeçalho simples */}
-      <View style={styles.header}>
-        <View>
-          <Text style={styles.tituloApp}>Sistema de Academia</Text>
-          <Text style={styles.subtituloUsuario}>{usuarioLogado}</Text>
-        </View>
+        {!usuarioLogado ? (
+          <LoginScreen
+            onLoginSucesso={(perfil) => {
+              setUsuarioLogado(perfil);
+              setTelaAtiva(perfil.tipo === 'aluno' ? 'meu_treino' : 'alunos');
+            }}
+          />
+        ) : (
+          <>
+            {/* Topo simples e direto */}
+            <View style={styles.appBar}>
+              <View>
+                <Text style={styles.appBarTitle}>{tituloTela}</Text>
+                <Text style={styles.userSub}>
+                  {usuarioLogado.nome} ({ehAluno ? 'Aluno' : 'Professor'})
+                </Text>
+              </View>
 
-        <View style={styles.headerBotoes}>
-          <TouchableOpacity
-            style={[
-              styles.btnConexao,
-              online ? styles.btnOnline : styles.btnOffline,
-            ]}
-            onPress={() => setSimularOffline(!simularOffline)}
-          >
-            <Text
-              style={[
-                styles.textoConexao,
-                online ? styles.textoOnline : styles.textoOffline,
-              ]}
-            >
-              {online ? 'Online' : 'Offline (SQLite)'}
-            </Text>
-          </TouchableOpacity>
+              <View style={styles.appBarRight}>
+                <TouchableOpacity
+                  style={styles.statusBtn}
+                  onPress={() => setSimularOffline(!simularOffline)}
+                >
+                  <View
+                    style={[
+                      styles.statusDot,
+                      { backgroundColor: online ? '#16A34A' : '#D97706' },
+                    ]}
+                  />
+                  <Text style={styles.statusText}>
+                    {online ? 'Online' : 'Offline'}
+                  </Text>
+                </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.btnSair}
-            onPress={() => setUsuarioLogado(null)}
-          >
-            <Text style={styles.textoSair}>Sair</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
+                <TouchableOpacity onPress={() => setUsuarioLogado(null)}>
+                  <Text style={styles.logoutText}>Sair</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
 
-      {/* Abas dos 3 CRUDs */}
-      <View style={styles.abasContainer}>
-        <TouchableOpacity
-          style={[styles.aba, telaAtiva === 'alunos' && styles.abaAtiva]}
-          onPress={() => setTelaAtiva('alunos')}
-        >
-          <Text
-            style={[
-              styles.textoAba,
-              telaAtiva === 'alunos' && styles.textoAbaAtiva,
-            ]}
-          >
-            Alunos
-          </Text>
-        </TouchableOpacity>
+            {avisoSync ? (
+              <View style={styles.syncBanner}>
+                <Text style={styles.syncBannerText}>{avisoSync}</Text>
+              </View>
+            ) : null}
 
-        <TouchableOpacity
-          style={[styles.aba, telaAtiva === 'exercicios' && styles.abaAtiva]}
-          onPress={() => setTelaAtiva('exercicios')}
-        >
-          <Text
-            style={[
-              styles.textoAba,
-              telaAtiva === 'exercicios' && styles.textoAbaAtiva,
-            ]}
-          >
-            Exercícios
-          </Text>
-        </TouchableOpacity>
+            {/* Corpo da Tela */}
+            <View style={styles.screenBody} key={syncKey}>
+              {telaAtiva === 'perfil' ? (
+                <PerfilScreen
+                  usuario={usuarioLogado}
+                  online={online}
+                  onAtualizarPerfil={(novoPerfil) =>
+                    setUsuarioLogado(novoPerfil)
+                  }
+                  onExcluirConta={() => setUsuarioLogado(null)}
+                />
+              ) : ehAluno ? (
+                <AreaAlunoScreen usuario={usuarioLogado} online={online} />
+              ) : (
+                <>
+                  {telaAtiva === 'alunos' && (
+                    <AlunosScreen
+                      online={online}
+                      professorLogado={usuarioLogado}
+                      onVerTreinoAluno={(nomeAluno) => {
+                        setAlunoSelecionadoTreino(nomeAluno);
+                        setTelaAtiva('treinos');
+                      }}
+                    />
+                  )}
+                  {telaAtiva === 'exercicios' && (
+                    <ExerciciosScreen online={online} />
+                  )}
+                  {telaAtiva === 'treinos' && (
+                    <TreinosScreen
+                      online={online}
+                      professorLogado={usuarioLogado}
+                      alunoFiltro={alunoSelecionadoTreino}
+                      onMudarAlunoFiltro={setAlunoSelecionadoTreino}
+                    />
+                  )}
+                </>
+              )}
+            </View>
 
-        <TouchableOpacity
-          style={[styles.aba, telaAtiva === 'treinos' && styles.abaAtiva]}
-          onPress={() => setTelaAtiva('treinos')}
-        >
-          <Text
-            style={[
-              styles.textoAba,
-              telaAtiva === 'treinos' && styles.textoAbaAtiva,
-            ]}
-          >
-            Treinos
-          </Text>
-        </TouchableOpacity>
-      </View>
+            {/* Barra de Navegação Inferior com Ícone + Texto (sem formato de botão) */}
+            <View style={styles.bottomTabBar}>
+              {ehAluno ? (
+                <>
+                  <TouchableOpacity
+                    style={styles.tabItem}
+                    onPress={() => setTelaAtiva('meu_treino')}
+                  >
+                    <Ionicons
+                      name={
+                        telaAtiva === 'meu_treino'
+                          ? 'barbell'
+                          : 'barbell-outline'
+                      }
+                      size={22}
+                      color={
+                        telaAtiva === 'meu_treino' ? '#111111' : '#888888'
+                      }
+                    />
+                    <Text
+                      style={[
+                        styles.tabLabel,
+                        telaAtiva === 'meu_treino' && styles.tabLabelActive,
+                      ]}
+                    >
+                      Meu Treino
+                    </Text>
+                  </TouchableOpacity>
 
-      {/* Conteúdo */}
-      <View style={styles.conteudo}>
-        <View style={styles.wrapper}>
-          {telaAtiva === 'alunos' && <AlunosScreen online={online} />}
-          {telaAtiva === 'exercicios' && <ExerciciosScreen online={online} />}
-          {telaAtiva === 'treinos' && <TreinosScreen online={online} />}
-        </View>
-      </View>
-    </SafeAreaView>
+                  <TouchableOpacity
+                    style={styles.tabItem}
+                    onPress={() => setTelaAtiva('perfil')}
+                  >
+                    <Ionicons
+                      name={
+                        telaAtiva === 'perfil' ? 'person' : 'person-outline'
+                      }
+                      size={22}
+                      color={telaAtiva === 'perfil' ? '#111111' : '#888888'}
+                    />
+                    <Text
+                      style={[
+                        styles.tabLabel,
+                        telaAtiva === 'perfil' && styles.tabLabelActive,
+                      ]}
+                    >
+                      Perfil
+                    </Text>
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <>
+                  <TouchableOpacity
+                    style={styles.tabItem}
+                    onPress={() => setTelaAtiva('alunos')}
+                  >
+                    <Ionicons
+                      name={
+                        telaAtiva === 'alunos' ? 'people' : 'people-outline'
+                      }
+                      size={22}
+                      color={telaAtiva === 'alunos' ? '#111111' : '#888888'}
+                    />
+                    <Text
+                      style={[
+                        styles.tabLabel,
+                        telaAtiva === 'alunos' && styles.tabLabelActive,
+                      ]}
+                    >
+                      Alunos
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.tabItem}
+                    onPress={() => setTelaAtiva('exercicios')}
+                  >
+                    <Ionicons
+                      name={
+                        telaAtiva === 'exercicios'
+                          ? 'barbell'
+                          : 'barbell-outline'
+                      }
+                      size={22}
+                      color={
+                        telaAtiva === 'exercicios' ? '#111111' : '#888888'
+                      }
+                    />
+                    <Text
+                      style={[
+                        styles.tabLabel,
+                        telaAtiva === 'exercicios' && styles.tabLabelActive,
+                      ]}
+                    >
+                      Exercícios
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.tabItem}
+                    onPress={() => setTelaAtiva('treinos')}
+                  >
+                    <Ionicons
+                      name={
+                        telaAtiva === 'treinos'
+                          ? 'clipboard'
+                          : 'clipboard-outline'
+                      }
+                      size={22}
+                      color={telaAtiva === 'treinos' ? '#111111' : '#888888'}
+                    />
+                    <Text
+                      style={[
+                        styles.tabLabel,
+                        telaAtiva === 'treinos' && styles.tabLabelActive,
+                      ]}
+                    >
+                      Treinos
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.tabItem}
+                    onPress={() => setTelaAtiva('perfil')}
+                  >
+                    <Ionicons
+                      name={
+                        telaAtiva === 'perfil' ? 'person' : 'person-outline'
+                      }
+                      size={22}
+                      color={telaAtiva === 'perfil' ? '#111111' : '#888888'}
+                    />
+                    <Text
+                      style={[
+                        styles.tabLabel,
+                        telaAtiva === 'perfil' && styles.tabLabelActive,
+                      ]}
+                    >
+                      Perfil
+                    </Text>
+                  </TouchableOpacity>
+                </>
+              )}
+            </View>
+          </>
+        )}
+      </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  outerBackground: {
     flex: 1,
-    backgroundColor: '#F3F4F6',
-    paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight || 0 : 0,
+    backgroundColor: Platform.OS === 'web' ? '#EBEBEB' : '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  header: {
+  mobileFrame: {
+    flex: 1,
+    width: '100%',
+    maxWidth: Platform.OS === 'web' ? 420 : undefined,
+    maxHeight: Platform.OS === 'web' ? 860 : undefined,
     backgroundColor: '#FFFFFF',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E7EB',
+    paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight || 0 : 0,
+    ...(Platform.OS === 'web'
+      ? {
+          borderWidth: 1,
+          borderColor: '#D4D4D4',
+        }
+      : {}),
+  },
+  appBar: {
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 20,
+    paddingVertical: 14,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E5E5',
   },
-  tituloApp: {
-    fontSize: 17,
+  appBarTitle: {
+    fontSize: 19,
     fontWeight: '700',
-    color: '#111827',
+    color: '#111111',
   },
-  subtituloUsuario: {
+  userSub: {
     fontSize: 12,
-    color: '#6B7280',
-    marginTop: 1,
+    color: '#777777',
+    marginTop: 2,
   },
-  headerBotoes: {
+  appBarRight: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 16,
   },
-  btnConexao: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 6,
-    borderWidth: 1,
+  statusBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
   },
-  btnOnline: {
-    backgroundColor: '#DCFCE7',
-    borderColor: '#BBF7D0',
+  statusDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
   },
-  btnOffline: {
-    backgroundColor: '#FEF3C7',
-    borderColor: '#FDE68A',
-  },
-  textoConexao: {
+  statusText: {
     fontSize: 12,
-    fontWeight: '600',
+    color: '#555555',
   },
-  textoOnline: {
+  logoutText: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#C53030',
+  },
+  syncBanner: {
+    backgroundColor: '#F0FDF4',
+    borderBottomWidth: 1,
+    borderBottomColor: '#BBF7D0',
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+  },
+  syncBannerText: {
+    fontSize: 12,
     color: '#166534',
+    fontWeight: '500',
   },
-  textoOffline: {
-    color: '#92400E',
+  screenBody: {
+    flex: 1,
   },
-  btnSair: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 6,
-    backgroundColor: '#F3F4F6',
-  },
-  textoSair: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#374151',
-  },
-  abasContainer: {
+  bottomTabBar: {
     flexDirection: 'row',
     backgroundColor: '#FFFFFF',
-    paddingHorizontal: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#E5E5E5',
     paddingVertical: 8,
-    gap: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E7EB',
+    paddingBottom: Platform.OS === 'ios' ? 4 : 8,
   },
-  aba: {
-    flex: 1,
-    paddingVertical: 8,
-    borderRadius: 6,
-    backgroundColor: '#F3F4F6',
-    alignItems: 'center',
-  },
-  abaAtiva: {
-    backgroundColor: '#2563EB',
-  },
-  textoAba: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#4B5563',
-  },
-  textoAbaAtiva: {
-    color: '#FFFFFF',
-  },
-  conteudo: {
+  tabItem: {
     flex: 1,
     alignItems: 'center',
+    justifyContent: 'center',
+    gap: 3,
+    paddingVertical: 4,
   },
-  wrapper: {
-    flex: 1,
-    width: '100%',
-    maxWidth: 720,
+  tabLabel: {
+    fontSize: 11,
+    fontWeight: '500',
+    color: '#888888',
+  },
+  tabLabelActive: {
+    color: '#111111',
+    fontWeight: '700',
   },
 });

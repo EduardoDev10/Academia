@@ -2,12 +2,26 @@ import { getDatabase } from './database';
 import { salvarNoFirestore, deletarDoFirestore } from './firebase';
 import { Treino } from '../types/Treino';
 
-export async function listarTreinos(): Promise<Treino[]> {
+function gerarIdDoc(professorEmail: string | undefined, id: number): string {
+  const prefixo = (professorEmail || 'geral')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '_');
+  return `${prefixo}_${id}`;
+}
+
+export async function listarTreinos(professorEmail?: string): Promise<Treino[]> {
   const db = await getDatabase();
   const result = await db.getAllAsync<Treino>(
     'SELECT * FROM treinos ORDER BY id DESC'
   );
-  return result;
+  if (!professorEmail) return result;
+  const emailProf = professorEmail.trim().toLowerCase();
+  return result.filter(
+    (t) =>
+      !t.professorEmail ||
+      t.professorEmail.trim().toLowerCase() === emailProf
+  );
 }
 
 export async function criarTreino(
@@ -19,10 +33,14 @@ export async function criarTreino(
     const sincronizado = online ? 1 : 0;
 
     const resultado = await db.runAsync(
-      'INSERT INTO treinos (alunoNome, exercicioNome, diaSemana, carga, sincronizado) VALUES (?, ?, ?, ?, ?)',
+      'INSERT INTO treinos (alunoNome, alunoEmail, professorNome, professorEmail, exercicioNome, divisao, diaSemana, carga, sincronizado) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [
         treino.alunoNome,
+        treino.alunoEmail || '',
+        treino.professorNome || '',
+        treino.professorEmail || '',
         treino.exercicioNome,
+        treino.divisao || 'Treino A',
         treino.diaSemana,
         treino.carga,
         sincronizado,
@@ -30,7 +48,8 @@ export async function criarTreino(
     );
 
     if (online && resultado.lastInsertRowId) {
-      await salvarNoFirestore('treinos', resultado.lastInsertRowId, {
+      const docId = gerarIdDoc(treino.professorEmail, resultado.lastInsertRowId);
+      await salvarNoFirestore('treinos_v2', docId, {
         id: resultado.lastInsertRowId,
         ...treino,
       });
@@ -53,10 +72,14 @@ export async function atualizarTreino(
     const sincronizado = online ? 1 : 0;
 
     await db.runAsync(
-      'UPDATE treinos SET alunoNome = ?, exercicioNome = ?, diaSemana = ?, carga = ?, sincronizado = ? WHERE id = ?',
+      'UPDATE treinos SET alunoNome = ?, alunoEmail = ?, professorNome = ?, professorEmail = ?, exercicioNome = ?, divisao = ?, diaSemana = ?, carga = ?, sincronizado = ? WHERE id = ?',
       [
         treino.alunoNome,
+        treino.alunoEmail || '',
+        treino.professorNome || '',
+        treino.professorEmail || '',
         treino.exercicioNome,
+        treino.divisao || 'Treino A',
         treino.diaSemana,
         treino.carga,
         sincronizado,
@@ -65,7 +88,8 @@ export async function atualizarTreino(
     );
 
     if (online) {
-      await salvarNoFirestore('treinos', id, { id, ...treino });
+      const docId = gerarIdDoc(treino.professorEmail, id);
+      await salvarNoFirestore('treinos_v2', docId, { id, ...treino });
     }
 
     return true;
@@ -77,14 +101,17 @@ export async function atualizarTreino(
 
 export async function deletarTreino(
   id: number,
-  online: boolean = true
+  online: boolean = true,
+  professorEmail?: string
 ): Promise<boolean> {
   try {
     const db = await getDatabase();
     await db.runAsync('DELETE FROM treinos WHERE id = ?', [id]);
 
     if (online) {
-      await deletarDoFirestore('treinos', id);
+      const docId = gerarIdDoc(professorEmail, id);
+      await deletarDoFirestore('treinos_v2', docId);
+      await deletarDoFirestore('treinos_v2', id);
     }
 
     return true;
@@ -103,7 +130,8 @@ export async function sincronizarTreinos(): Promise<number> {
 
     for (const item of pendentes) {
       if (item.id) {
-        await salvarNoFirestore('treinos', item.id, item);
+        const docId = gerarIdDoc(item.professorEmail, item.id);
+        await salvarNoFirestore('treinos_v2', docId, item);
         await db.runAsync('UPDATE treinos SET sincronizado = 1 WHERE id = ?', [
           item.id,
         ]);

@@ -9,27 +9,55 @@ import {
   StyleSheet,
   ActivityIndicator,
   Platform,
+  Modal,
+  ScrollView,
+  KeyboardAvoidingView,
 } from 'react-native';
-import { criarTabela } from '../services/database';
+import { Ionicons } from '@expo/vector-icons';
+import { criarTabela, EXERCICIOS_PREDEFINIDOS } from '../services/database';
 import {
   listarTreinos,
   criarTreino,
   atualizarTreino,
   deletarTreino,
 } from '../services/treinoService';
+import { listarAlunos } from '../services/alunoService';
+import { listarExercicios } from '../services/exercicioService';
+import {
+  PerfilUsuario,
+  listarTodosTreinosNaNuvem,
+} from '../services/firebase';
 import { Treino } from '../types/Treino';
+import { Aluno } from '../types/Aluno';
+import { Exercicio } from '../types/Exercicio';
 
 interface Props {
   online: boolean;
+  professorLogado?: PerfilUsuario;
+  alunoFiltro?: string;
+  onMudarAlunoFiltro?: (nome: string) => void;
 }
 
-export default function TreinosScreen({ online }: Props) {
+export default function TreinosScreen({
+  online,
+  professorLogado,
+  alunoFiltro = 'Todos',
+  onMudarAlunoFiltro,
+}: Props) {
   const [treinos, setTreinos] = useState<Treino[]>([]);
+  const [alunosCadastrados, setAlunosCadastrados] = useState<Aluno[]>([]);
+  const [exerciciosCadastrados, setExerciciosCadastrados] = useState<Exercicio[]>([]);
+
   const [alunoNome, setAlunoNome] = useState('');
   const [exercicioNome, setExercicioNome] = useState('');
-  const [diaSemana, setDiaSemana] = useState('');
+  const [divisao, setDivisao] = useState('Treino A');
+  const [divisaoFiltro, setDivisaoFiltro] = useState('Todos');
+  const [diaSemana, setDiaSemana] = useState('4x12');
   const [carga, setCarga] = useState('');
   const [editandoId, setEditandoId] = useState<number | null>(null);
+  const [modalVisivel, setModalVisivel] = useState(false);
+  const [abrirListaAlunos, setAbrirListaAlunos] = useState(false);
+  const [abrirListaExercicios, setAbrirListaExercicios] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -39,7 +67,7 @@ export default function TreinosScreen({ online }: Props) {
   async function inicializar() {
     try {
       await criarTabela();
-      await carregarTreinos();
+      await carregarDados();
     } catch (error) {
       Alert.alert('Erro', 'Falha ao inicializar banco');
     } finally {
@@ -47,38 +75,81 @@ export default function TreinosScreen({ online }: Props) {
     }
   }
 
-  async function carregarTreinos() {
-    const dados = await listarTreinos();
-    setTreinos(dados);
+  async function carregarDados() {
+    const [listaT, listaA, listaE] = await Promise.all([
+      listarTreinos(professorLogado?.email),
+      listarAlunos(professorLogado?.email, online),
+      listarExercicios(),
+    ]);
+
+    const emailsAtivos = new Set(
+      listaA.map((a) => (a.email || '').trim().toLowerCase())
+    );
+    const nomesAtivos = new Set(
+      listaA.map((a) => (a.nome || '').trim().toLowerCase())
+    );
+
+    // Exibe apenas treinos dos alunos que continuam vinculados a este professor
+    const treinosAtivos = listaT.filter((t) => {
+      const emailT = (t.alunoEmail || '').trim().toLowerCase();
+      const nomeT = (t.alunoNome || '').trim().toLowerCase();
+      return (
+        (emailT && emailsAtivos.has(emailT)) ||
+        (nomeT && nomesAtivos.has(nomeT))
+      );
+    });
+
+    setTreinos(treinosAtivos);
+    setAlunosCadastrados(listaA);
+    setExerciciosCadastrados(listaE);
   }
 
+  // Lista completa com todos os exercícios predefinidos disponíveis
+  const opcoesExercicios = [
+    ...EXERCICIOS_PREDEFINIDOS,
+    ...exerciciosCadastrados.filter(
+      (cad) =>
+        !EXERCICIOS_PREDEFINIDOS.some(
+          (pre) => pre.nome.toLowerCase() === cad.nome.toLowerCase()
+        )
+    ),
+  ];
+
   async function salvar() {
-    if (!alunoNome.trim() || !exercicioNome.trim() || !diaSemana.trim() || !carga.trim()) {
-      Alert.alert('Erro', 'Preencha todos os campos da ficha de treino.');
+    if (!alunoNome.trim() || !exercicioNome.trim() || !diaSemana.trim()) {
+      Alert.alert('Erro', 'Escolha o aluno, o exercício e informe as repetições.');
       return;
     }
 
     setLoading(true);
+    const alunoObj = alunosCadastrados.find(
+      (al) => al.nome.toLowerCase() === alunoNome.trim().toLowerCase()
+    );
+
     const dados = {
       alunoNome: alunoNome.trim(),
+      alunoEmail: alunoObj?.email ? alunoObj.email.trim().toLowerCase() : '',
+      professorNome: professorLogado?.nome || 'Professor',
+      professorEmail: professorLogado?.email || '',
       exercicioNome: exercicioNome.trim(),
-      diaSemana: diaSemana.trim(),
-      carga: carga.trim(),
+      divisao: divisao || 'Treino A',
+      diaSemana: diaSemana.trim(), // Armazena as Séries x Repetições (ex: 4x12)
+      carga: carga.trim() || 'Livre',
     };
 
     if (editandoId) {
       const ok = await atualizarTreino(editandoId, dados, online);
       if (ok) {
-        limpar();
-        await carregarTreinos();
+        fecharModal();
+        await carregarDados();
       } else {
         Alert.alert('Erro', 'Falha ao atualizar treino');
       }
     } else {
       const ok = await criarTreino(dados, online);
       if (ok) {
-        limpar();
-        await carregarTreinos();
+        fecharModal();
+        await carregarDados();
       } else {
         Alert.alert('Erro', 'Falha ao cadastrar treino');
       }
@@ -87,19 +158,34 @@ export default function TreinosScreen({ online }: Props) {
     setLoading(false);
   }
 
+  function abrirNovo() {
+    limpar();
+    if (alunoFiltro && alunoFiltro !== 'Todos') {
+      setAlunoNome(alunoFiltro);
+    } else if (alunosCadastrados.length > 0) {
+      setAlunoNome(alunosCadastrados[0].nome);
+    }
+    setAbrirListaExercicios(true);
+    setModalVisivel(true);
+  }
+
   function editar(treino: Treino) {
     setEditandoId(treino.id ?? null);
     setAlunoNome(treino.alunoNome);
     setExercicioNome(treino.exercicioNome);
+    setDivisao(treino.divisao || 'Treino A');
     setDiaSemana(treino.diaSemana);
     setCarga(treino.carga);
+    setAbrirListaAlunos(false);
+    setAbrirListaExercicios(false);
+    setModalVisivel(true);
   }
 
   async function executarExclusao(id: number) {
     setLoading(true);
-    const ok = await deletarTreino(id, online);
+    const ok = await deletarTreino(id, online, professorLogado?.email);
     if (ok) {
-      await carregarTreinos();
+      await carregarDados();
     } else {
       Alert.alert('Erro', 'Falha ao excluir');
     }
@@ -123,10 +209,30 @@ export default function TreinosScreen({ online }: Props) {
   function limpar() {
     setAlunoNome('');
     setExercicioNome('');
+    setDivisao('Treino A');
     setDiaSemana('');
     setCarga('');
     setEditandoId(null);
+    setAbrirListaAlunos(false);
+    setAbrirListaExercicios(false);
   }
+
+  function fecharModal() {
+    limpar();
+    setModalVisivel(false);
+  }
+
+  const treinosFiltrados = treinos.filter((item) => {
+    const passaAluno =
+      !alunoFiltro ||
+      alunoFiltro === 'Todos' ||
+      item.alunoNome.toLowerCase() === alunoFiltro.toLowerCase();
+    const divItem = item.divisao || 'Treino A';
+    const passaDivisao =
+      divisaoFiltro === 'Todos' ||
+      divItem.toLowerCase() === divisaoFiltro.toLowerCase();
+    return passaAluno && passaDivisao;
+  });
 
   if (loading && treinos.length === 0) {
     return (
@@ -138,105 +244,308 @@ export default function TreinosScreen({ online }: Props) {
 
   return (
     <View style={styles.container}>
-      <FlatList
-        data={treinos}
-        keyExtractor={(item) => item.id!.toString()}
-        contentContainerStyle={styles.lista}
-        ListHeaderComponent={
-          <View style={styles.formCard}>
-            <Text style={styles.titulo}>
-              {editandoId ? 'Editar Ficha de Treino' : 'Fichas de Treino'}
+      <View style={styles.topoLista}>
+        <View style={styles.filtroWrap}>
+          <TouchableOpacity
+            style={[
+              styles.filtroChip,
+              alunoFiltro === 'Todos' && styles.filtroChipAtivo,
+            ]}
+            onPress={() => onMudarAlunoFiltro && onMudarAlunoFiltro('Todos')}
+          >
+            <Text
+              style={[
+                styles.filtroChipTexto,
+                alunoFiltro === 'Todos' && styles.filtroChipTextoAtivo,
+              ]}
+            >
+              Todos
             </Text>
+          </TouchableOpacity>
 
-            <TextInput
-              style={styles.input}
-              placeholder="Nome do aluno"
-              placeholderTextColor="#9CA3AF"
-              value={alunoNome}
-              onChangeText={setAlunoNome}
-            />
-
-            <TextInput
-              style={styles.input}
-              placeholder="Exercício (Ex: Agachamento Livre)"
-              placeholderTextColor="#9CA3AF"
-              value={exercicioNome}
-              onChangeText={setExercicioNome}
-            />
-
-            <View style={styles.linha}>
-              <TextInput
-                style={[styles.input, { flex: 1 }]}
-                placeholder="Dia / Treino (Ex: Segunda - A)"
-                placeholderTextColor="#9CA3AF"
-                value={diaSemana}
-                onChangeText={setDiaSemana}
-              />
-              <TextInput
-                style={[styles.input, { width: 120 }]}
-                placeholder="Carga (30kg)"
-                placeholderTextColor="#9CA3AF"
-                value={carga}
-                onChangeText={setCarga}
-              />
-            </View>
-
-            <View style={styles.botoesForm}>
-              <TouchableOpacity style={styles.botaoSalvar} onPress={salvar}>
-                <Text style={styles.textoBotao}>
-                  {editandoId ? 'Atualizar' : 'Cadastrar'}
-                </Text>
-              </TouchableOpacity>
-
-              {editandoId && (
-                <TouchableOpacity style={styles.botaoCancelar} onPress={limpar}>
-                  <Text style={styles.textoBotaoCancelar}>Cancelar</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-          </View>
-        }
-        renderItem={({ item }) => (
-          <View style={styles.card}>
-            <View style={{ flex: 1 }}>
-              <View style={styles.topoCard}>
-                <Text style={styles.nome}>{item.alunoNome}</Text>
+          {alunosCadastrados.map((al) => {
+            const ativo = alunoFiltro === al.nome;
+            return (
+              <TouchableOpacity
+                key={al.id}
+                style={[styles.filtroChip, ativo && styles.filtroChipAtivo]}
+                onPress={() => onMudarAlunoFiltro && onMudarAlunoFiltro(al.nome)}
+              >
                 <Text
                   style={[
-                    styles.tagSync,
-                    item.sincronizado ? styles.syncOk : styles.syncPendente,
+                    styles.filtroChipTexto,
+                    ativo && styles.filtroChipTextoAtivo,
                   ]}
                 >
-                  {item.sincronizado ? 'Sincronizado' : 'Salvo offline'}
+                  {al.nome}
                 </Text>
-              </View>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
 
-              <Text style={styles.info}>Exercício: {item.exercicioNome}</Text>
-              <Text style={styles.info}>
-                Dia: {item.diaSemana} • Carga: {item.carga}
+        <TouchableOpacity style={styles.botaoNovo} onPress={abrirNovo}>
+          <Text style={styles.botaoNovoTexto}>+ Adicionar</Text>
+        </TouchableOpacity>
+      </View>
+
+      <View style={styles.subFiltroBar}>
+        {['Todos', 'Treino A', 'Treino B', 'Treino C'].map((div) => {
+          const ativo = divisaoFiltro === div;
+          return (
+            <TouchableOpacity
+              key={div}
+              style={[styles.subFiltroBtn, ativo && styles.subFiltroBtnAtivo]}
+              onPress={() => setDivisaoFiltro(div)}
+            >
+              <Text
+                style={[
+                  styles.subFiltroTexto,
+                  ativo && styles.subFiltroTextoAtivo,
+                ]}
+              >
+                {div}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
+      <FlatList
+        data={treinosFiltrados}
+        keyExtractor={(item) => item.id!.toString()}
+        contentContainerStyle={styles.lista}
+        renderItem={({ item }) => (
+          <View style={styles.itemRow}>
+            <View style={styles.itemTop}>
+              <Text style={styles.nome}>{item.exercicioNome}</Text>
+              <Text style={styles.statusSync}>
+                {item.sincronizado ? 'Salvo na nuvem' : 'Offline'}
               </Text>
             </View>
 
-            <View style={styles.acoes}>
-              <TouchableOpacity
-                style={styles.btnEditar}
-                onPress={() => editar(item)}
-              >
-                <Text style={styles.textoEditar}>Editar</Text>
+            <Text style={styles.subInfo}>
+              {item.divisao || 'Treino A'} · Aluno: {item.alunoNome}
+              {item.professorNome ? ` · Prof: ${item.professorNome}` : ''}
+            </Text>
+
+            <Text style={styles.info}>
+              Séries: {item.diaSemana} · Carga: {item.carga}
+            </Text>
+
+            <View style={styles.acoesRow}>
+              <TouchableOpacity onPress={() => editar(item)}>
+                <Text style={styles.linkSecundario}>Editar</Text>
               </TouchableOpacity>
+
               <TouchableOpacity
-                style={styles.btnExcluir}
                 onPress={() => excluir(item.id!, item.alunoNome)}
               >
-                <Text style={styles.textoExcluir}>Excluir</Text>
+                <Text style={styles.linkExcluir}>Excluir</Text>
               </TouchableOpacity>
             </View>
           </View>
         )}
         ListEmptyComponent={
-          <Text style={styles.vazio}>Nenhuma ficha de treino cadastrada.</Text>
+          <View style={styles.vazioBox}>
+            <Text style={styles.vazioTexto}>
+              {alunoFiltro !== 'Todos'
+                ? `Nenhum treino cadastrado para ${alunoFiltro}.`
+                : 'Nenhuma ficha cadastrada.'}
+            </Text>
+          </View>
         }
       />
+
+      <Modal
+        visible={modalVisivel}
+        animationType="fade"
+        transparent
+        onRequestClose={fecharModal}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalOverlay}
+        >
+          <View style={styles.modalBox}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitulo}>
+                {editandoId ? 'Editar item da ficha' : 'Adicionar exercício à ficha'}
+              </Text>
+              <TouchableOpacity onPress={fecharModal}>
+                <Text style={styles.fecharTexto}>Fechar</Text>
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+            >
+              <Text style={styles.label}>Aluno</Text>
+              <TouchableOpacity
+                style={styles.selectButton}
+                onPress={() => {
+                  setAbrirListaAlunos(!abrirListaAlunos);
+                  setAbrirListaExercicios(false);
+                }}
+              >
+                <Text
+                  style={[
+                    styles.selectButtonText,
+                    !alunoNome && { color: '#999999' },
+                  ]}
+                >
+                  {alunoNome || 'Selecionar aluno...'}
+                </Text>
+                <Ionicons
+                  name={abrirListaAlunos ? 'chevron-up' : 'chevron-down'}
+                  size={18}
+                  color="#666666"
+                />
+              </TouchableOpacity>
+
+              {abrirListaAlunos && (
+                <ScrollView style={styles.dropdownList} nestedScrollEnabled>
+                  {alunosCadastrados.length === 0 ? (
+                    <Text style={styles.avisoSemAluno}>
+                      Cadastre um aluno primeiro na aba Alunos.
+                    </Text>
+                  ) : (
+                    alunosCadastrados.map((al) => {
+                      const selecionado = alunoNome === al.nome;
+                      return (
+                        <TouchableOpacity
+                          key={al.id}
+                          style={[
+                            styles.dropdownItem,
+                            selecionado && styles.dropdownItemAtivo,
+                          ]}
+                          onPress={() => {
+                            setAlunoNome(al.nome);
+                            setAbrirListaAlunos(false);
+                          }}
+                        >
+                          <Text style={styles.dropdownItemTitulo}>
+                            {al.nome}
+                          </Text>
+                          <Text style={styles.dropdownItemSub}>{al.email}</Text>
+                        </TouchableOpacity>
+                      );
+                    })
+                  )}
+                </ScrollView>
+              )}
+
+              <Text style={styles.label}>Divisão da ficha</Text>
+              <View style={styles.divisaoRow}>
+                {['Treino A', 'Treino B', 'Treino C'].map((op) => {
+                  const ativo = divisao === op;
+                  return (
+                    <TouchableOpacity
+                      key={op}
+                      style={[
+                        styles.divisaoOpcao,
+                        ativo && styles.divisaoOpcaoAtiva,
+                      ]}
+                      onPress={() => setDivisao(op)}
+                    >
+                      <Text
+                        style={[
+                          styles.divisaoOpcaoTexto,
+                          ativo && styles.divisaoOpcaoTextoAtivo,
+                        ]}
+                      >
+                        {op}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              <Text style={styles.label}>Exercício</Text>
+              <TouchableOpacity
+                style={styles.selectButton}
+                onPress={() => {
+                  setAbrirListaExercicios(!abrirListaExercicios);
+                  setAbrirListaAlunos(false);
+                }}
+              >
+                <Text
+                  style={[
+                    styles.selectButtonText,
+                    !exercicioNome && { color: '#999999' },
+                  ]}
+                >
+                  {exercicioNome || 'Selecionar exercício...'}
+                </Text>
+                <Ionicons
+                  name={abrirListaExercicios ? 'chevron-up' : 'chevron-down'}
+                  size={18}
+                  color="#666666"
+                />
+              </TouchableOpacity>
+
+              {abrirListaExercicios && (
+                <ScrollView style={styles.dropdownList} nestedScrollEnabled>
+                  {opcoesExercicios.map((ex, idx) => {
+                    const selecionado = exercicioNome === ex.nome;
+                    return (
+                      <TouchableOpacity
+                        key={`${ex.nome}-${idx}`}
+                        style={[
+                          styles.dropdownItem,
+                          selecionado && styles.dropdownItemAtivo,
+                        ]}
+                        onPress={() => {
+                          setExercicioNome(ex.nome);
+                          if (!diaSemana && ex.series) {
+                            setDiaSemana(ex.series);
+                          }
+                          setAbrirListaExercicios(false);
+                        }}
+                      >
+                        <Text style={styles.dropdownItemTitulo}>{ex.nome}</Text>
+                        <Text style={styles.dropdownItemSub}>
+                          {ex.grupoMuscular} · {ex.series}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              )}
+
+              <View style={styles.linha}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.label}>Séries e repetições</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Ex: 4x12"
+                    placeholderTextColor="#999999"
+                    value={diaSemana}
+                    onChangeText={setDiaSemana}
+                  />
+                </View>
+                <View style={{ width: 120 }}>
+                  <Text style={styles.label}>Carga</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Ex: 30kg"
+                    placeholderTextColor="#999999"
+                    value={carga}
+                    onChangeText={setCarga}
+                  />
+                </View>
+              </View>
+
+              <TouchableOpacity style={styles.botaoSalvar} onPress={salvar}>
+                <Text style={styles.textoBotaoSalvar}>
+                  {editandoId ? 'Salvar' : 'Adicionar'}
+                </Text>
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </View>
   );
 }
@@ -244,147 +553,284 @@ export default function TreinosScreen({ online }: Props) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F3F4F6',
+    backgroundColor: '#FFFFFF',
+  },
+  topoLista: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E5E5',
+    backgroundColor: '#FAFAFA',
+    gap: 10,
+  },
+  filtroWrap: {
+    flex: 1,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    alignItems: 'center',
+  },
+  filtroChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: '#D4D4D4',
+    backgroundColor: '#FFFFFF',
+  },
+  filtroChipAtivo: {
+    backgroundColor: '#111111',
+    borderColor: '#111111',
+  },
+  filtroChipTexto: {
+    fontSize: 12,
+    color: '#555555',
+  },
+  filtroChipTextoAtivo: {
+    color: '#FFFFFF',
+    fontWeight: '500',
+  },
+  botaoNovo: {
+    backgroundColor: '#111111',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 5,
+  },
+  botaoNovoTexto: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  subFiltroBar: {
+    flexDirection: 'row',
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#EAEAEA',
+    backgroundColor: '#FFFFFF',
+    gap: 8,
+  },
+  subFiltroBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: '#E5E5E5',
+  },
+  subFiltroBtnAtivo: {
+    borderColor: '#111111',
+    backgroundColor: '#F5F5F5',
+  },
+  subFiltroTexto: {
+    fontSize: 12,
+    color: '#666666',
+  },
+  subFiltroTextoAtivo: {
+    color: '#111111',
+    fontWeight: '600',
+  },
+  divisaoRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 12,
+  },
+  divisaoOpcao: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 9,
+    borderRadius: 5,
+    borderWidth: 1,
+    borderColor: '#D4D4D4',
+    backgroundColor: '#FAFAFA',
+  },
+  divisaoOpcaoAtiva: {
+    borderColor: '#111111',
+    backgroundColor: '#111111',
+  },
+  divisaoOpcaoTexto: {
+    fontSize: 13,
+    color: '#555555',
+    fontWeight: '500',
+  },
+  divisaoOpcaoTextoAtivo: {
+    color: '#FFFFFF',
+    fontWeight: '600',
   },
   lista: {
-    padding: 16,
+    paddingHorizontal: 20,
+    paddingBottom: 30,
   },
   centro: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  formCard: {
-    backgroundColor: '#FFFFFF',
-    padding: 16,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    marginBottom: 16,
+  itemRow: {
+    paddingVertical: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: '#EAEAEA',
   },
-  titulo: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#111827',
-    marginBottom: 14,
+  itemTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  nome: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#111111',
+  },
+  statusSync: {
+    fontSize: 11,
+    color: '#888888',
+  },
+  subInfo: {
+    fontSize: 13,
+    color: '#444444',
+    marginTop: 3,
+  },
+  info: {
+    fontSize: 13,
+    color: '#666666',
+    marginTop: 2,
+  },
+  acoesRow: {
+    flexDirection: 'row',
+    gap: 18,
+    marginTop: 8,
+  },
+  linkSecundario: {
+    fontSize: 13,
+    color: '#555555',
+  },
+  linkExcluir: {
+    fontSize: 13,
+    color: '#C53030',
+  },
+  vazioBox: {
+    paddingVertical: 48,
+    alignItems: 'center',
+  },
+  vazioTexto: {
+    fontSize: 14,
+    color: '#777777',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 18,
+  },
+  modalBox: {
+    width: '100%',
+    maxWidth: 380,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    padding: 20,
+    maxHeight: '88%',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#EAEAEA',
+  },
+  modalTitulo: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#111111',
+  },
+  fecharTexto: {
+    fontSize: 13,
+    color: '#666666',
+  },
+  label: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#333333',
+    marginBottom: 5,
+  },
+  selectButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FAFAFA',
+    borderRadius: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#D4D4D4',
+  },
+  selectButtonText: {
+    fontSize: 14,
+    color: '#111111',
+  },
+  dropdownList: {
+    backgroundColor: '#FAFAFA',
+    borderRadius: 5,
+    borderWidth: 1,
+    borderColor: '#D4D4D4',
+    marginBottom: 12,
+    maxHeight: 200,
+    overflow: 'hidden',
+  },
+  dropdownItem: {
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderBottomWidth: 1,
+    borderBottomColor: '#EAEAEA',
+  },
+  dropdownItemAtivo: {
+    backgroundColor: '#EFEFEF',
+  },
+  dropdownItemTitulo: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#111111',
+  },
+  dropdownItemSub: {
+    fontSize: 12,
+    color: '#666666',
+  },
+  avisoSemAluno: {
+    padding: 12,
+    fontSize: 13,
+    color: '#666666',
+    textAlign: 'center',
   },
   linha: {
     flexDirection: 'row',
     gap: 10,
   },
   input: {
-    backgroundColor: '#F9FAFB',
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
-    borderRadius: 8,
+    backgroundColor: '#FAFAFA',
+    borderRadius: 5,
     paddingHorizontal: 12,
     paddingVertical: 10,
     fontSize: 14,
-    color: '#111827',
-    marginBottom: 10,
-  },
-  botoesForm: {
-    flexDirection: 'row',
-    gap: 10,
-    marginTop: 4,
+    color: '#111111',
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#D4D4D4',
   },
   botaoSalvar: {
-    flex: 1,
-    backgroundColor: '#2563EB',
-    paddingVertical: 11,
-    borderRadius: 8,
+    backgroundColor: '#111111',
+    paddingVertical: 13,
+    borderRadius: 5,
     alignItems: 'center',
+    marginTop: 6,
   },
-  botaoCancelar: {
-    backgroundColor: '#E5E7EB',
-    paddingVertical: 11,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  textoBotao: {
+  textoBotaoSalvar: {
     color: '#FFFFFF',
     fontWeight: '600',
-    fontSize: 14,
-  },
-  textoBotaoCancelar: {
-    color: '#374151',
-    fontWeight: '600',
-    fontSize: 14,
-  },
-  card: {
-    backgroundColor: '#FFFFFF',
-    padding: 14,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    marginBottom: 10,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: 12,
-  },
-  topoCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 4,
-  },
-  nome: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#111827',
-  },
-  tagSync: {
-    fontSize: 11,
-    fontWeight: '600',
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    borderRadius: 6,
-  },
-  syncOk: {
-    backgroundColor: '#DCFCE7',
-    color: '#166534',
-  },
-  syncPendente: {
-    backgroundColor: '#FEF3C7',
-    color: '#92400E',
-  },
-  info: {
-    fontSize: 13,
-    color: '#4B5563',
-    marginTop: 2,
-  },
-  acoes: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  btnEditar: {
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    borderRadius: 6,
-    backgroundColor: '#EFF6FF',
-  },
-  textoEditar: {
-    color: '#2563EB',
-    fontWeight: '600',
-    fontSize: 13,
-  },
-  btnExcluir: {
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    borderRadius: 6,
-    backgroundColor: '#FEF2F2',
-  },
-  textoExcluir: {
-    color: '#DC2626',
-    fontWeight: '600',
-    fontSize: 13,
-  },
-  vazio: {
-    textAlign: 'center',
-    marginTop: 30,
-    color: '#6B7280',
     fontSize: 14,
   },
 });
